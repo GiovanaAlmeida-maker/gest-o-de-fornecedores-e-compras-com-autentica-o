@@ -1,0 +1,227 @@
+from flask import Flask, request, redirect, url_for, render_template_string, flash, Response
+from flask_sqlalchemy import SQLAlchemy
+from flask_login import LoginManager, UserMixin, login_user, login_required, logout_user, current_user
+from werkzeug.security import generate_password_hash, check_password_hash
+from io import StringIO
+import csv
+
+# Inicialização
+app = Flask(__name__)
+app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///database.db'
+app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+app.secret_key = 'supersecretkey'
+db = SQLAlchemy(app)
+login_manager = LoginManager(app)
+login_manager.login_view = 'login'
+
+# Modelos
+class Fornecedor(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    nome = db.Column(db.String(100), nullable=False)
+    endereco = db.Column(db.String(200))
+    telefone = db.Column(db.String(15))
+    compras = db.relationship('Compra', backref='fornecedor', lazy=True)
+
+class Compra(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    fornecedor_id = db.Column(db.Integer, db.ForeignKey('fornecedor.id'), nullable=False)
+    data = db.Column(db.String(10), nullable=False)
+    valor_total = db.Column(db.Float, nullable=False)
+
+class User(UserMixin, db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    username = db.Column(db.String(100), unique=True, nullable=False)
+    password = db.Column(db.String(200), nullable=False)
+
+@login_manager.user_loader
+def load_user(user_id):
+    return User.query.get(int(user_id))
+
+# Página inicial
+@app.route('/')
+@login_required
+def index():
+    page = request.args.get('page', 1, type=int)
+    search = request.args.get('search', '', type=str)
+    fornecedores = Fornecedor.query.filter(Fornecedor.nome.contains(search)).paginate(page=page, per_page=5)
+    compras = Compra.query.paginate(page=page, per_page=5)
+    return render_template_string('''
+        <h1>Gestão de Fornecedores e Compras</h1>
+
+        <form method="GET">
+            Buscar Fornecedor: <input type="text" name="search" value="{{ request.args.get('search', '') }}">
+            <button type="submit">Buscar</button>
+        </form>
+
+        <h2>Fornecedores</h2>
+        <ul>
+            {% for f in fornecedores.items %}
+                <li>{{ f.nome }} - {{ f.endereco }} - {{ f.telefone }}
+                    <a href="{{ url_for('adicionar_compra', fornecedor_id=f.id) }}">[+ Compra]</a>
+                    <a href="{{ url_for('editar_fornecedor', id=f.id) }}">[Editar]</a>
+                    <form method="POST" action="{{ url_for('deletar_fornecedor', id=f.id) }}" style="display:inline;">
+                        <button type="submit" onclick="return confirm('Tem certeza que deseja excluir este fornecedor?')">[Excluir]</button>
+                    </form>
+                </li>
+            {% endfor %}
+        </ul>
+        <div>
+            {% if fornecedores.has_prev %}
+                <a href="{{ url_for('index', page=fornecedores.prev_num, search=request.args.get('search', '')) }}">Anterior</a>
+            {% endif %}
+            Página {{ fornecedores.page }} de {{ fornecedores.pages }}
+            {% if fornecedores.has_next %}
+                <a href="{{ url_for('index', page=fornecedores.next_num, search=request.args.get('search', '')) }}">Próxima</a>
+            {% endif %}
+        </div>
+
+        <h2>Adicionar Fornecedor</h2>
+        <form method="POST" action="{{ url_for('adicionar_fornecedor') }}">
+            Nome: <input type="text" name="nome" required><br>
+            Endereço: <input type="text" name="endereco"><br>
+            Telefone: <input type="text" name="telefone"><br>
+            <button type="submit">Cadastrar</button>
+        </form>
+
+        <h2>Compras</h2>
+        <ul>
+            {% for c in compras.items %}
+                <li>{{ c.data }} - R$ {{ '%.2f'|format(c.valor_total) }} - Fornecedor: {{ c.fornecedor.nome }}</li>
+            {% endfor %}
+        </ul>
+        <a href="{{ url_for('exportar_compras') }}">Exportar Compras CSV</a> |
+        <a href="{{ url_for('exportar_fornecedores') }}">Exportar Fornecedores CSV</a> |
+        <a href="{{ url_for('logout') }}">Logout</a>
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% for cat, msg in messages %}
+                <p style="color: {% if cat == 'error' %}red{% else %}green{% endif %}">{{ msg }}</p>
+            {% endfor %}
+        {% endwith %}
+    ''', fornecedores=fornecedores, compras=compras)
+
+@app.route('/adicionar_fornecedor', methods=['POST'])
+@login_required
+def adicionar_fornecedor():
+    nome = request.form['nome']
+    endereco = request.form['endereco']
+    telefone = request.form['telefone']
+    if not nome:
+        flash('Nome é obrigatório!', 'error')
+        return redirect(url_for('index'))
+    db.session.add(Fornecedor(nome=nome, endereco=endereco, telefone=telefone))
+    db.session.commit()
+    flash('Fornecedor cadastrado!', 'success')
+    return redirect(url_for('index'))
+
+@app.route('/editar_fornecedor/<int:id>', methods=['GET', 'POST'])
+@login_required
+def editar_fornecedor(id):
+    fornecedor = Fornecedor.query.get_or_404(id)
+    if request.method == 'POST':
+        fornecedor.nome = request.form['nome']
+        fornecedor.endereco = request.form['endereco']
+        fornecedor.telefone = request.form['telefone']
+        db.session.commit()
+        flash('Fornecedor editado!', 'success')
+        return redirect(url_for('index'))
+    return render_template_string('''
+        <h1>Editar Fornecedor</h1>
+        <form method="POST">
+            Nome: <input type="text" name="nome" value="{{ fornecedor.nome }}" required><br>
+            Endereço: <input type="text" name="endereco" value="{{ fornecedor.endereco }}"><br>
+            Telefone: <input type="text" name="telefone" value="{{ fornecedor.telefone }}"><br>
+            <button type="submit">Salvar</button>
+        </form>
+        <a href="{{ url_for('index') }}">Voltar</a>
+    ''', fornecedor=fornecedor)
+
+@app.route('/deletar_fornecedor/<int:id>', methods=['POST'])
+@login_required
+def deletar_fornecedor(id):
+    fornecedor = Fornecedor.query.get_or_404(id)
+    if fornecedor.compras:
+        flash('Não é possível excluir fornecedor com compras!', 'error')
+    else:
+        db.session.delete(fornecedor)
+        db.session.commit()
+        flash('Fornecedor excluído!', 'success')
+    return redirect(url_for('index'))
+
+@app.route('/adicionar_compra/<int:fornecedor_id>', methods=['GET', 'POST'])
+@login_required
+def adicionar_compra(fornecedor_id):
+    fornecedor = Fornecedor.query.get_or_404(fornecedor_id)
+    if request.method == 'POST':
+        data = request.form['data']
+        valor_total = request.form['valor_total']
+        db.session.add(Compra(fornecedor_id=fornecedor_id, data=data, valor_total=float(valor_total)))
+        db.session.commit()
+        flash('Compra adicionada!', 'success')
+        return redirect(url_for('index'))
+    return render_template_string('''
+        <h1>Adicionar Compra para {{ fornecedor.nome }}</h1>
+        <form method="POST">
+            Data: <input type="date" name="data" required><br>
+            Valor Total: <input type="number" step="0.01" name="valor_total" required><br>
+            <button type="submit">Salvar</button>
+        </form>
+        <a href="{{ url_for('index') }}">Voltar</a>
+    ''', fornecedor=fornecedor)
+
+@app.route('/exportar_compras')
+@login_required
+def exportar_compras():
+    compras = Compra.query.all()
+    si = StringIO()
+    writer = csv.writer(si)
+    writer.writerow(['ID', 'Fornecedor', 'Data', 'Valor Total'])
+    for c in compras:
+        writer.writerow([c.id, c.fornecedor.nome, c.data, c.valor_total])
+    return Response(si.getvalue(), mimetype='text/csv',
+                    headers={"Content-Disposition": "attachment;filename=compras.csv"})
+
+@app.route('/exportar_fornecedores')
+@login_required
+def exportar_fornecedores():
+    fornecedores = Fornecedor.query.all()
+    si = StringIO()
+    writer = csv.writer(si)
+    writer.writerow(['ID', 'Nome', 'Endereço', 'Telefone'])
+    for f in fornecedores:
+        writer.writerow([f.id, f.nome, f.endereco, f.telefone])
+    return Response(si.getvalue(), mimetype='text/csv',
+                    headers={"Content-Disposition": "attachment;filename=fornecedores.csv"})
+
+# Login e logout
+@app.route('/login', methods=['GET', 'POST'])
+def login():
+    if request.method == 'POST':
+        user = User.query.filter_by(username=request.form['username']).first()
+        if user and check_password_hash(user.password, request.form['password']):
+            login_user(user)
+            return redirect(url_for('index'))
+        flash('Credenciais inválidas!', 'error')
+    return render_template_string('''
+        <h1>Login</h1>
+        <form method="POST">
+            Usuário: <input type="text" name="username" required><br>
+            Senha: <input type="password" name="password" required><br>
+            <button type="submit">Entrar</button>
+        </form>
+    ''')
+
+@app.route('/logout')
+@login_required
+def logout():
+    logout_user()
+    flash('Você saiu da sessão.', 'success')
+    return redirect(url_for('login'))
+
+# Inicialização
+if __name__ == '__main__':
+    db.create_all()
+    # Criar admin padrão se não existir
+    if not User.query.filter_by(username='admin').first():
+        db.session.add(User(username='admin', password=generate_password_hash('admin')))
+        db.session.commit()
+    app.run(debug=True)
