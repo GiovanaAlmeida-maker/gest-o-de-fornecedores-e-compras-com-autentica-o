@@ -1,10 +1,10 @@
-# 🧾 Sistema de Gestão de Fornecedores e Compras (Flask)
+# Sistema de Gestão de Fornecedores e Compras (Flask)
 
 Este projeto é um sistema web básico, feito com **Python + Flask**, para gerenciar **fornecedores** e **compras** de uma empresa. Ele permite o cadastro, edição, exclusão, visualização e exportação de dados de forma simples, acessível via navegador.
 
 ---
 
-## ✅ Funcionalidades principais
+## Funcionalidades principais
 
 - Autenticação de usuário com senha criptografada
 - Cadastro e listagem de **fornecedores**
@@ -18,7 +18,7 @@ Este projeto é um sistema web básico, feito com **Python + Flask**, para geren
 
 ---
 
-## 🔐 Acesso ao sistema
+## Acesso ao sistema
 
 - Acesse via: `http://localhost:5000/login`
 - Usuário padrão: `admin`
@@ -26,7 +26,7 @@ Este projeto é um sistema web básico, feito com **Python + Flask**, para geren
 
 ---
 
-## 🛠 Como rodar
+## Como rodar
 
 1. Certifique-se de ter o Python 3 instalado.
 2. Instale as dependências:
